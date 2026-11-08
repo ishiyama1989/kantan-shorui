@@ -1,6 +1,6 @@
 // オフラインでも使えるようにするための仕組み（サービスワーカー）
 // 中身を更新したら、下の VERSION の数字を変えてください
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = 'kantan-shorui-' + VERSION;
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'lib/html2canvas.min.js', 'lib/jspdf.umd.min.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
