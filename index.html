@@ -41,6 +41,7 @@ html,body{overflow-x:hidden}
 label{display:block;font-size:12px;color:var(--sub);margin:8px 0 3px}
 input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:16px;background:#fff;color:var(--ink)}
 textarea{min-height:64px;resize:vertical}
+textarea.addr{min-height:0;height:auto}
 input,select,textarea{max-width:100%;min-width:0}
 input[type=date]{-webkit-appearance:none;appearance:none;display:block;min-width:0;width:100%;min-height:44px;text-align:left}
 input[type=date]::-webkit-date-and-time-value{text-align:left}
@@ -91,12 +92,13 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
 #paper .meta{text-align:right;font-size:12px;margin-bottom:6px}
 #paper .meta div{margin:1px 0}
 #paper .head{display:flex;justify-content:space-between;gap:24px;margin-top:6px}
-#paper .to{flex:1}
-#paper .to .name{font-size:20px;font-weight:700;border-bottom:1.5px solid #111;padding-bottom:4px;display:inline-block;min-width:300px}
-#paper .to .name span{font-size:15px;margin-left:10px}
+#paper .to{flex:1;min-width:0}
+#paper .to .name{font-size:20px;font-weight:700;border-bottom:1.5px solid #111;padding-bottom:4px;display:inline-block;min-width:300px;vertical-align:top}
+#paper .to .name span{font-size:.75em;margin-left:10px}
+#paper .fit1{white-space:nowrap;overflow:hidden;max-width:100%}
 #paper .lead{margin:14px 0 4px}
 #paper .subj{margin:6px 0}
-#paper .from{width:270px;font-size:12px;position:relative}
+#paper .from{width:270px;flex-shrink:0;font-size:12px;position:relative}
 #paper .from .fn{font-size:15px;font-weight:700;margin-bottom:2px}
 #paper .from img{position:absolute;right:0;top:0;width:66px;height:66px;object-fit:contain;opacity:.92}
 #paper .amount{display:flex;align-items:baseline;gap:18px;border-bottom:2px solid #111;padding:6px 4px;margin:18px 0 6px;width:430px}
@@ -180,7 +182,8 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
         </div>
         <div class="hint">会社・お店あては「御中」、個人あては「様」</div>
         <label>宛先の住所（任意）</label>
-        <input id="clientAddr" placeholder="例：〒000-0000 〇〇県〇〇市…">
+        <textarea id="clientAddr" class="addr" rows="3" placeholder="例：〒000-0000 〇〇県〇〇市…
+（改行すると、書類でも改行されます）"></textarea>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button class="btn" style="flex:1" id="clientSave">☆ この宛先を登録</button>
           <button class="btn" id="clientManageBtn">登録の管理</button>
@@ -257,7 +260,8 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
           <div class="hint">ここの内容はこの端末に覚えておくので、次からは入力不要です。</div>
           <label>名前・屋号・会社名</label><input id="i_name" placeholder="例：〇〇デザイン事務所 / 山田太郎">
           <label>担当者名（任意）</label><input id="i_person">
-          <label>郵便番号・住所</label><input id="i_addr" placeholder="例：〒400-0000 山梨県〇〇市…">
+          <label>郵便番号・住所</label><textarea id="i_addr" class="addr" rows="3" placeholder="例：〒400-0000 山梨県〇〇市…
+（改行すると、書類でも改行されます）"></textarea>
           <div class="row">
             <div><label>電話番号</label><input id="i_tel"></div>
             <div><label>メール</label><input id="i_mail"></div>
@@ -441,6 +445,18 @@ function calc(d){
 const rateLabel = r => r===0 ? '非課税・対象外' : (r===8 ? '8%（軽減）' : r+'%');
 
 /* ===== 書類の描画 ===== */
+// 改行ごとに1行ずつに分ける（長すぎる行はあとで文字を小さくして1行に収める）
+const lines1 = t => String(t || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean).map(x => `<div class="fit1">${esc(x)}</div>`).join('');
+function fitLines(){
+  const p = $('paper'); if(!p.offsetWidth) return; // 見えていないときは測れないので、表示したときにやり直す
+  p.querySelectorAll('.fit1').forEach(el => {
+    el.style.fontSize = '';
+    let fs = parseFloat(getComputedStyle(el).fontSize);
+    for(let i = 0; i < 8 && el.scrollWidth > el.clientWidth + 1 && fs > 6; i++){
+      fs = Math.max(6, fs * el.clientWidth / el.scrollWidth * .98); el.style.fontSize = fs + 'px';
+    }
+  });
+}
 function renderPaper(){
   const d = doc, T = TYPES[d.type], c = calc(d), P = $('paper');
   P.className = d.type==='receipt' ? 'receipt' : '';
@@ -448,16 +464,16 @@ function renderPaper(){
   const fromHtml = `
     <div class="from">
       ${stamp ? `<img src="${esc(stamp)}" alt="">` : ''}
-      <div class="fn">${esc(issuer.name) || '<span style="color:#bbb">（あなたの名前・屋号）</span>'}</div>
-      ${issuer.person ? `<div>担当：${esc(issuer.person)}</div>`:''}
-      ${issuer.addr ? `<div>${esc(issuer.addr)}</div>`:''}
-      ${issuer.tel ? `<div>TEL：${esc(issuer.tel)}</div>`:''}
-      ${issuer.mail ? `<div>${esc(issuer.mail)}</div>`:''}
-      ${issuer.reg ? `<div>登録番号：${esc(issuer.reg)}</div>`:''}
+      <div class="fn fit1">${esc(issuer.name) || '<span style="color:#bbb">（あなたの名前・屋号）</span>'}</div>
+      ${issuer.person ? `<div class="fit1">担当：${esc(issuer.person)}</div>`:''}
+      ${lines1(issuer.addr)}
+      ${issuer.tel ? `<div class="fit1">TEL：${esc(issuer.tel)}</div>`:''}
+      ${issuer.mail ? `<div class="fit1">${esc(issuer.mail)}</div>`:''}
+      ${issuer.reg ? `<div class="fit1">登録番号：${esc(issuer.reg)}</div>`:''}
     </div>`;
   const trade = d.type==='estimate' || d.showTrade===false || !d.tradeDate ? '' : (d.tradeEnd && d.tradeEnd !== d.tradeDate ? `お取引期間：${jpDate(d.tradeDate)}〜${jpDate(d.tradeEnd)}` : `お取引日：${jpDate(d.tradeDate)}`);
   const meta = `<div class="meta"><div>No. ${esc(d.no)}</div><div>発行日：${jpDate(d.date)}</div>${trade ? `<div>${trade}</div>` : ''}</div>`;
-  const toName = `<div class="name">${esc(d.client) || '<span style="color:#bbb;margin:0;font-size:20px">（宛先）</span>'}<span>${esc(d.honor)}</span></div>${d.clientAddr ? `<div style="font-size:12px;margin-top:4px">${esc(d.clientAddr)}</div>` : ''}`;
+  const toName = `<div class="name fit1">${esc(d.client) || '<span style="color:#bbb;margin:0;font-size:20px">（宛先）</span>'}<span>${esc(d.honor)}</span></div>${d.clientAddr ? `<div style="font-size:12px;margin-top:4px">${lines1(d.clientAddr)}</div>` : ''}`;
   const sumsTable = `
     <table>
       ${c.rows.map(r => r.disc > 0
@@ -498,7 +514,7 @@ function renderPaper(){
         <div class="to">
           ${toName}
           <div class="lead">${T.lead}</div>
-          ${d.subject ? `<div class="subj">件名：${esc(d.subject)}</div>`:''}
+          ${d.subject ? `<div class="subj fit1">件名：${esc(d.subject)}</div>`:''}
         </div>
         ${fromHtml}
       </div>
@@ -531,6 +547,7 @@ function renderPaper(){
 }
 function fitPaper(){
   const w = $('paperWrap'), p = $('paper');
+  fitLines();
   if(!w.clientWidth) return;
   const s = w.clientWidth / 794;
   p.style.transform = `scale(${s})`;
@@ -694,6 +711,7 @@ async function capture(){
   p.style.transform = 'none'; w.style.overflow='visible'; w.style.height='auto';
   const wasHidden = getComputedStyle($('panePv')).display === 'none';
   if(wasHidden) $('panePv').style.display='block';
+  fitLines();
   try{
     return await html2canvas(p, {scale:2, backgroundColor:'#ffffff', useCORS:true, width:794, height:p.offsetHeight, windowWidth:1200, scrollX:0, scrollY:-window.scrollY});
   } finally {
@@ -805,7 +823,7 @@ function renderClients(){
   ul.innerHTML = list.length ? '' : '<li style="color:var(--sub)">まだ登録がありません</li>';
   list.forEach((c,i) => {
     const li = document.createElement('li');
-    li.innerHTML = `<div class="t"><b>${esc(c.name)} ${esc(c.honor)}</b>${c.addr?`<br>${esc(c.addr)}`:''}</div><button class="btn" style="color:var(--warn)">削除</button>`;
+    li.innerHTML = `<div class="t"><b>${esc(c.name)} ${esc(c.honor)}</b>${c.addr?`<br>${esc(c.addr).replace(/\n/g,'<br>')}`:''}</div><button class="btn" style="color:var(--warn)">削除</button>`;
     li.querySelector('button').onclick = () => ask(`「${c.name}」を登録から削除しますか？`, () => { const l = store.get('dm_clients', []); l.splice(i,1); store.set('dm_clients', l); renderClients(); });
     ul.appendChild(li);
   });
