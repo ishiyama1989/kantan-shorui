@@ -10,7 +10,7 @@
 | `index.html` | アプリ本体（画面・計算・PDF作成すべて） |
 | `lib/html2canvas.min.js` | 画面を画像にする部品（v1.4.1） |
 | `lib/jspdf.umd.min.js` | PDFを作る部品（v2.5.1） |
-| `lib/ocr/` | 名刺の写真から文字を読み取る部品（Tesseract.js v6.0.1・日本語/英語データ。Apache-2.0）。ボタンを押したときだけ読み込む |
+| `lib/ocr/` | 名刺の写真から文字を読み取る部品（Tesseract.js v6.0.1・日本語データ。Apache-2.0）。ボタンを押したときだけ読み込む |
 | `manifest.webmanifest` | ホーム画面に追加したときの名前・アイコンの設定 |
 | `sw.js` | オフラインでも使えるようにする仕組み（サービスワーカー） |
 | `icons/` | アプリのアイコン |

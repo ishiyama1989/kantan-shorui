@@ -328,6 +328,7 @@ details summary{cursor:pointer;font-weight:700;font-size:15px}
     <div class="ocrProg"><div id="ocrBar"></div></div>
     <div class="hint" id="ocrMsg">準備しています…</div>
   </div>
+  <div class="note" id="ocrErr" style="display:none"></div>
   <div id="ocrRes" style="display:none">
     <div class="note" style="background:var(--accent2);color:var(--accent)">読み取り結果はまちがっていることがあります。下の欄を確認して、直してから「入力する」を押してください。</div>
     <div class="ocrF">
@@ -848,13 +849,19 @@ $('ocrRot').onclick = () => { OCR.rot = (OCR.rot + 90) % 360; ocrRead(); };
 $('ocrFile').onchange = async e => {
   const f = e.target.files[0]; e.target.value = ''; if(!f) return;
   try{
-    OCR.img = await new Promise((ok, ng) => { const im = new Image(); im.onload = () => ok(im); im.onerror = ng; im.src = URL.createObjectURL(f); });
+    const url = URL.createObjectURL(f);
+    const im = await new Promise((ok, ng) => { const im = new Image(); im.onload = () => ok(im); im.onerror = ng; im.src = url; });
+    // スマホの写真はとても大きいので、先に小さくしてメモリを空ける
+    const k = Math.min(1, 2600 / Math.max(im.naturalWidth, im.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+    c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+    OCR.img = c;
   }catch(err){ toast('この写真は開けませんでした（JPEGやPNGの写真を選んでください）'); return; }
   OCR.rot = 0; ocrRead();
 };
 // 読み取りやすいように、大きさをそろえて白黒にし、くっきりさせる（大きすぎると大きな文字が読めなくなるので、長い辺を1300pxにそろえる）
 function ocrCanvas(img, rot){
-  const w0 = img.naturalWidth, h0 = img.naturalHeight, long = Math.max(w0, h0);
+  const w0 = img.width, h0 = img.height, long = Math.max(w0, h0);
   const k = 1300 / long;
   const w = Math.round(w0 * k), h = Math.round(h0 * k), side = rot % 180 !== 0;
   const cv = document.createElement('canvas'); cv.width = side ? h : w; cv.height = side ? w : h;
@@ -868,38 +875,71 @@ function ocrCanvas(img, rot){
   g.setTransform(1, 0, 0, 1, 0, 0); g.putImageData(id, 0, 0);
   return cv;
 }
+// 読み取りの部品を準備する。safe=true のときは、古いスマホでも動きやすい設定（高速化なし・保存なし）にする
+async function ocrStart(safe){
+  if(!window.Tesseract) await loadScript('lib/ocr/tesseract.min.js');
+  const abs = p => new URL(p, location.href).href;
+  const opt = {
+    workerPath: abs('lib/ocr/worker.min.js'), corePath: abs(safe ? 'lib/ocr/core/tesseract-core-lstm.wasm.js' : 'lib/ocr/core/'), langPath: abs('lib/ocr/lang'), workerBlobURL: false,
+    logger: m => {
+      const p = m.progress || 0;
+      if(m.status === 'loading tesseract core') ocrProg(.02 + p * .2);
+      else if(/traineddata/.test(m.status)) ocrProg(.22 + p * .28, '日本語の読み取りデータを準備しています…');
+      else if(m.status === 'recognizing text') ocrProg(.5 + p * .5, '文字を読み取っています… ' + Math.round(p * 100) + '%');
+    }
+  };
+  if(safe) opt.cacheMethod = 'none';
+  OCR.worker = await Tesseract.createWorker('jpn', 1, opt);
+}
+async function ocrRecognize(cv){
+  await OCR.worker.setParameters({ tessedit_pageseg_mode: '11' }); // 名刺のように文字がばらばらに配置されたもの向け
+  ocrProg(.5, '文字を読み取っています…');
+  const { data } = await OCR.worker.recognize(cv, {}, { text: true, blocks: true });
+  const lines = [];
+  (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => {
+    const t = ocrClean(l.text);
+    if(t && /[0-9A-Za-z぀-ヿ一-鿿]/.test(t) && l.confidence >= 40 && !(t.length < 3 && l.confidence < 60)) lines.push({ t, h: l.bbox.y1 - l.bbox.y0, conf: l.confidence, bbox: l.bbox });
+  })));
+  return lines;
+}
+// お名前は文字が大きく、間があいていて読み違えやすいので、その行だけ切り出して1行として読み直す
+async function ocrRefineName(cv, line){
+  const bb = line.bbox, lh = bb.y1 - bb.y0, pad = lh * .3;
+  const x0 = Math.max(0, bb.x0 - pad), x1 = Math.min(cv.width, bb.x1 + lh * 2.5), y0 = Math.max(0, bb.y0 - pad), y1 = Math.min(cv.height, bb.y1 + pad);
+  const k = 60 / lh, c = document.createElement('canvas'); c.width = Math.round((x1 - x0) * k); c.height = Math.round((y1 - y0) * k);
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(cv, x0, y0, x1 - x0, y1 - y0, 0, 0, c.width, c.height);
+  await OCR.worker.setParameters({ tessedit_pageseg_mode: '7' });
+  const { data } = await OCR.worker.recognize(c);
+  const t = ocrClean(data.text).replace(/[^぀-ヿ一-鿿々]/g, '');
+  return t;
+}
 async function ocrRead(){
   if(OCR.busy || !OCR.img) return; OCR.busy = true;
   const cv = ocrCanvas(OCR.img, OCR.rot);
   $('ocrImg').src = cv.toDataURL('image/jpeg', .8); $('ocrImg').style.display = ''; $('ocrIntro').style.display = 'none';
-  $('ocrRun').style.display = ''; $('ocrRes').style.display = 'none'; $('ocrApply').style.display = 'none'; $('ocrRot').style.display = 'none'; $('ocrPick').disabled = true;
-  try{
-    if(!OCR.worker){
-      ocrProg(.02, '読み取りの準備をしています…（はじめての時は1分ほどかかることがあります）');
-      if(!window.Tesseract) await loadScript('lib/ocr/tesseract.min.js');
-      const abs = p => new URL(p, location.href).href;
-      OCR.worker = await Tesseract.createWorker('jpn+eng', 1, {
-        workerPath: abs('lib/ocr/worker.min.js'), corePath: abs('lib/ocr/core/'), langPath: abs('lib/ocr/lang'), workerBlobURL: false,
-        logger: m => {
-          const p = m.progress || 0;
-          if(m.status === 'loading tesseract core') ocrProg(.02 + p * .2);
-          else if(/traineddata/.test(m.status)) ocrProg(.22 + p * .28, '日本語の読み取りデータを準備しています…');
-          else if(m.status === 'recognizing text') ocrProg(.5 + p * .5, '文字を読み取っています… ' + Math.round(p * 100) + '%');
-        }
-      });
-      await OCR.worker.setParameters({ tessedit_pageseg_mode: '11' }); // 名刺のように文字がばらばらに配置されたもの向け
+  $('ocrRun').style.display = ''; $('ocrErr').style.display = 'none'; $('ocrRes').style.display = 'none'; $('ocrApply').style.display = 'none'; $('ocrRot').style.display = 'none'; $('ocrPick').disabled = true;
+  let lines = null, lastErr = null;
+  // 1回目がだめなら、動きやすい設定に切り替えてもう1回だけ試す
+  for(const safe of OCR.safe ? [true] : [false, true]){
+    try{
+      if(!OCR.worker){ ocrProg(.02, '読み取りの準備をしています…（はじめての時は1分ほどかかることがあります）'); await ocrStart(safe); }
+      lines = await ocrRecognize(cv);
+      break;
+    }catch(err){
+      console.error(err); lastErr = err;
+      try{ if(OCR.worker) await OCR.worker.terminate(); }catch(e){}
+      OCR.worker = null; OCR.safe = true;
     }
-    ocrProg(.5, '文字を読み取っています…');
-    const { data } = await OCR.worker.recognize(cv, {}, { text: true, blocks: true });
-    const lines = [];
-    (data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => {
-      const t = ocrClean(l.text);
-      if(t && /[0-9A-Za-z぀-ヿ一-鿿]/.test(t) && !(t.length < 3 && l.confidence < 50)) lines.push({ t, h: l.bbox.y1 - l.bbox.y0, conf: l.confidence });
-    })));
-    ocrShowResult(lines);
-  }catch(err){
-    console.error(err); $('ocrRun').style.display = 'none';
-    toast('読み取りがうまくいきませんでした。もう一度お試しください');
+  }
+  try{
+    if(lines){
+      const r = ocrParse(lines);
+      if(r.nameLine){ try{ const t = await ocrRefineName(cv, r.nameLine); if(t.length >= 2 && t.length <= 8 && t[0] === r.person[0]) r.person = t; }catch(e){ console.error(e); } }
+      ocrShowResult(lines, r);
+    }else{
+      $('ocrRun').style.display = 'none';
+      $('ocrErr').style.display = ''; $('ocrErr').textContent = '読み取りがうまくいきませんでした。もう一度「写真を選ぶ」から試してください。何度やってもだめな場合は、この画面の写真（スクリーンショット）を送ってください。［' + String((lastErr && (lastErr.message || lastErr)) || '不明').slice(0, 160) + '］';
+    }
   }finally{ OCR.busy = false; $('ocrPick').disabled = false; }
 }
 // 読み取った文字の、よけいな空白や記号のゆれを直す
@@ -907,7 +947,8 @@ function ocrClean(t){
   return String(t || '').normalize('NFKC').replace(/[|]/g, ' ')
     .replace(/(\d)\s*[ー−‐―ｰ–—~〜]\s*(?=\d)/g, '$1-')
     .replace(/([^\x00-\x7F])\s+/g, '$1').replace(/\s+([^\x00-\x7F])/g, '$1')
-    .replace(/\s{2,}/g, ' ').trim();
+    .replace(/\s{2,}/g, ' ').trim()
+    .replace(/^[T丁干]\s*(?=\d{3}-\d{4}(?!\d))/, '〒'); // 〒が「T」などに読み違えられたとき
 }
 const PREFS = '青森|岩手|宮城|秋田|山形|福島|茨城|栃木|群馬|埼玉|千葉|神奈川|新潟|富山|石川|福井|山梨|長野|岐阜|静岡|愛知|三重|滋賀|兵庫|奈良|和歌山|鳥取|島根|岡山|広島|山口|徳島|香川|愛媛|高知|福岡|佐賀|長崎|熊本|大分|宮崎|鹿児島|沖縄';
 function ocrParse(lines){
@@ -949,15 +990,14 @@ function ocrParse(lines){
     if(jp.length >= 2 && jp.length <= 8 && jp.length >= s.replace(/\s/g, '').length * .8){ s = jp; ok = true; }
     else if(!jp.length && /^[A-Za-z]+( [A-Za-z]+){1,2}$/.test(s) && s.length <= 30){ ok = true; }
     if(/(部|課|室|グループ|チーム|本部|支店|営業所|センター)$/.test(s) && (hadTitle || s.length >= 3)) ok = false; // 「営業部」などの部署名はお名前ではない
-    if(ok && (!best || l.h > best.h * 1.05 || (jp.length && !best.jp && l.h > best.h * .8))) best = { s, h: l.h, jp: jp.length > 0 };
+    if(ok && (!best || l.h > best.h * 1.05 || (jp.length && !best.jp && l.h > best.h * .8))) best = { s, h: l.h, jp: jp.length > 0, line: l };
   });
-  if(best) R.person = best.s;
+  if(best){ R.person = best.s; R.nameLine = best.line; }
   return R;
 }
-function ocrShowResult(lines){
+function ocrShowResult(lines, r){
   $('ocrRun').style.display = 'none'; $('ocrRot').style.display = '';
   if(!lines.length){ toast('文字が見つかりませんでした。明るい場所で、名刺を大きく撮ってみてください'); return; }
-  const r = ocrParse(lines);
   $('ocr_company').value = r.company; $('ocr_person').value = r.person; $('ocr_addr').value = r.addr;
   $('ocr_style').value = r.company ? 'co' : 'person';
   const box = $('ocrChips'); box.innerHTML = '';
